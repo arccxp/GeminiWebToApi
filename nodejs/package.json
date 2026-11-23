@@ -1,0 +1,22 @@
+{
+  "name": "gemini-web-to-api",
+  "version": "1.0.0",
+  "description": "Zero-dependency Node.js/TypeScript wrapper and OpenAI/Anthropic bridge for Gemini Web",
+  "type": "module",
+  "main": "./src/index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./src/index.js"
+    }
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "test": "node --test test/gemini_web.test.mjs",
+    "serve": "node src/server.js"
+  },
+  "license": "GPL-3.0-or-later"
+}

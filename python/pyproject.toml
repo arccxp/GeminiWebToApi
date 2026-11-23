@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gemini-web-to-api"
+version = "1.0.0"
+description = "Zero-dependency Python wrapper and local OpenAI/Anthropic bridge for Gemini Web"
+requires-python = ">=3.9"
+license = {text = "GPL-3.0-or-later"}
+
+[tool.setuptools.packages.find]
+include = ["gemini_web_to_api*"]

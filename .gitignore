@@ -1,0 +1,31 @@
+# Build outputs
+cpp/build/
+*.obj
+*.o
+*.a
+*.lib
+*.dll
+*.so
+*.dylib
+*.exe
+*.pdb
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+
+# Node.js
+node_modules/
+npm-debug.log*
+
+# Local secrets and cookies
+.env
+.env.*
+cookies.txt
+*.local.*
+.ag_buf.txt
