@@ -50,6 +50,20 @@ GWA_API gwa_client_t* gwa_client_create(const char* cookie_header, int account_s
     return handle;
 }
 
+GWA_API gwa_client_t* gwa_client_create_from_session(const char* profile,
+                                                     char* err_buf, size_t err_buf_len) {
+    auto* handle = new gwa_client();
+    std::string err;
+    const std::string prof = (profile != nullptr && *profile != '\0') ? std::string(profile)
+                                                                      : std::string("default");
+    if (!handle->impl.InitFromSession(prof, err)) {
+        WriteErr(err_buf, err_buf_len, err);
+        delete handle;
+        return nullptr;
+    }
+    return handle;
+}
+
 GWA_API void gwa_client_destroy(gwa_client_t* client) { delete client; }
 
 GWA_API int gwa_client_ask(gwa_client_t* client, const char* prompt, const char* model,

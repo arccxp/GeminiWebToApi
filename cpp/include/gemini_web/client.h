@@ -134,6 +134,9 @@ public:
     Client() = default;
 
     bool Init(const std::string& cookieHeader, int accountSlot, std::string& error);
+    // Loads GEMINI_COOKIE or ~/.gemini-web-to-api/session.json (created by the browser login helper).
+    bool InitFromSession(const std::string& profile, std::string& error,
+                         const std::string& explicitSessionPath = {});
 
     bool ListModels(std::vector<WebModel>& models, std::string& error,
                     AccountTier* tierOut = nullptr, std::string* emailOut = nullptr);

@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import {
@@ -7,13 +10,16 @@ import {
   canonicalModelName,
   classifyQuotaRows,
   createBridgeServer,
+  formatCdpCookies,
   isUltraOnlyModel,
+  loadSession,
   modelAllowedOnPlan,
   modelSlug,
   nameAnswersTo,
   parseCookieHeader,
   parseToolCalls,
   rotatingCookieChanged,
+  saveSession,
   stripCitations,
   usageSummary,
 } from "../src/index.js";
@@ -155,6 +161,43 @@ test("client ask, stream, upload, usage, and cookie rotation", async () => {
 
   assert.equal(await client.rotateCookies({ force: true }), true);
   assert.match(client.liveCookies, /GwaAccounts\.__Host-GAPS=host_val/);
+});
+
+test("session.json persistence, CDP cookie scoping, and fromSession", async () => {
+  const header = formatCdpCookies(
+    [
+      { name: "__Secure-1PSID", value: "ps1", domain: ".google.com" },
+      { name: "SAPISID", value: "sap1", domain: ".google.com" },
+    ],
+    [
+      { name: "__Host-GAPS", value: "gap_val", domain: "accounts.google.com" },
+      { name: "__Secure-1PSIDTS", value: "ts_1", domain: ".google.com" },
+    ]
+  );
+  assert.match(header, /GwaAccounts\.__Host-GAPS=gap_val/);
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "gwa-node-test-"));
+  const sessionPath = path.join(tmpDir, "session.json");
+  const prevEnv = process.env.GEMINI_COOKIE;
+  delete process.env.GEMINI_COOKIE;
+  try {
+    saveSession(header, { profile: "work", email: "work@example.com", account: 0, sessionPath });
+    const loaded = loadSession("work", { sessionPath });
+    assert.equal(loaded.email, "work@example.com");
+
+    const client = await GeminiWebClient.fromSession({
+      profile: "work",
+      autoLogin: false,
+      sessionPath,
+      transport: makeMockTransport(),
+    });
+    await client.listModels();
+    const updated = loadSession("work", { sessionPath });
+    assert.match(updated.cookies, /__Secure-1PSIDTS=ts_rotated/);
+  } finally {
+    if (prevEnv !== undefined) process.env.GEMINI_COOKIE = prevEnv;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });
 
 test("bridge server supports OpenAI chat completions and Anthropic /v1/messages", async () => {

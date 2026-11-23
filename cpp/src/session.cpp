@@ -295,4 +295,123 @@ bool NeedsManualLogin(const Record& record) {
     return record.failures >= kMaxFailures;
 }
 
+namespace {
+
+bool ExtractJsonStringField(const std::string& json, size_t start, size_t end, const char* key,
+                            std::string& out) {
+    const std::string needle = std::string("\"") + key + "\"";
+    size_t pos = json.find(needle, start);
+    if (pos == std::string::npos || pos >= end) return false;
+    pos = json.find(':', pos + needle.size());
+    if (pos == std::string::npos || pos >= end) return false;
+    ++pos;
+    while (pos < end && (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\r' || json[pos] == '\n')) {
+        ++pos;
+    }
+    if (pos >= end || json[pos] != '"') return false;
+    ++pos;
+    std::string raw;
+    while (pos < end) {
+        const char c = json[pos++];
+        if (c == '\\' && pos < end) {
+            raw.push_back(c);
+            raw.push_back(json[pos++]);
+            continue;
+        }
+        if (c == '"') {
+            out = util::JsonUnescape(raw);
+            return true;
+        }
+        raw.push_back(c);
+    }
+    return false;
+}
+
+bool ExtractJsonIntField(const std::string& json, size_t start, size_t end, const char* key,
+                         int& out) {
+    const std::string needle = std::string("\"") + key + "\"";
+    size_t pos = json.find(needle, start);
+    if (pos == std::string::npos || pos >= end) return false;
+    pos = json.find(':', pos + needle.size());
+    if (pos == std::string::npos || pos >= end) return false;
+    ++pos;
+    while (pos < end && (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\r' || json[pos] == '\n')) {
+        ++pos;
+    }
+    if (pos >= end || !(json[pos] == '-' || (json[pos] >= '0' && json[pos] <= '9'))) return false;
+    out = static_cast<int>(std::strtol(json.c_str() + pos, nullptr, 10));
+    return true;
+}
+
+}  // namespace
+
+std::string SharedSessionPath() {
+    const std::string envFile = util::Trim(util::GetEnv("GEMINI_SESSION_FILE"));
+    if (!envFile.empty()) return envFile;
+    std::string dir = util::Trim(util::GetEnv("GEMINI_DATA_DIR"));
+    if (dir.empty()) {
+#ifdef _WIN32
+        std::string home = util::GetEnv("USERPROFILE");
+        if (home.empty()) home = util::GetEnv("HOME");
+        dir = home.empty() ? ".gemini-web-to-api" : home + "\\.gemini-web-to-api";
+#else
+        const std::string home = util::GetEnv("HOME");
+        dir = home.empty() ? ".gemini-web-to-api" : home + "/.gemini-web-to-api";
+#endif
+    }
+#ifdef _WIN32
+    return dir + "\\session.json";
+#else
+    return dir + "/session.json";
+#endif
+}
+
+bool LoadSharedSession(const std::string& profile, SharedSession& out,
+                       const std::string& explicitPath) {
+    out = SharedSession{};
+    const std::string filePath = explicitPath.empty() ? SharedSessionPath() : explicitPath;
+    std::vector<uint8_t> bytes;
+    if (!util::ReadFileBytes(filePath, bytes) || bytes.empty()) return false;
+    const std::string json(bytes.begin(), bytes.end());
+
+    const std::string key = profile.empty() ? "default" : profile;
+    const size_t accountsPos = json.find("\"accounts\"");
+    if (accountsPos == std::string::npos) return false;
+
+    const std::string profNeedle = "\"" + key + "\"";
+    size_t pos = json.find(profNeedle, accountsPos);
+    if (pos == std::string::npos) return false;
+    const size_t objStart = json.find('{', pos + profNeedle.size());
+    if (objStart == std::string::npos) return false;
+
+    int depth = 0;
+    bool inStr = false;
+    size_t objEnd = std::string::npos;
+    for (size_t i = objStart; i < json.size(); ++i) {
+        const char c = json[i];
+        if (inStr) {
+            if (c == '\\') ++i;
+            else if (c == '"') inStr = false;
+            continue;
+        }
+        if (c == '"') inStr = true;
+        else if (c == '{') ++depth;
+        else if (c == '}') {
+            if (--depth == 0) {
+                objEnd = i + 1;
+                break;
+            }
+        }
+    }
+    if (objEnd == std::string::npos) return false;
+
+    if (!ExtractJsonStringField(json, objStart, objEnd, "cookies", out.cookies) ||
+        out.cookies.empty()) {
+        return false;
+    }
+    ExtractJsonStringField(json, objStart, objEnd, "email", out.email);
+    ExtractJsonIntField(json, objStart, objEnd, "account", out.account);
+    return true;
+}
+
 }  // namespace gwa::session

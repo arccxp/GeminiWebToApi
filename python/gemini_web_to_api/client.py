@@ -193,6 +193,7 @@ class GeminiWebClient:
         generate_timeout: float = 300.0,
         allow_ultra: bool = False,
         on_cookie_update: Optional[Callable[[int, str], None]] = None,
+        on_browser_refresh: Optional[Callable[[], Optional[str]]] = None,
         transport: Optional[TransportFn] = None,
     ) -> None:
         if isinstance(cookies, CookieJar):
@@ -212,6 +213,7 @@ class GeminiWebClient:
         self.generate_timeout = generate_timeout
         self.allow_ultra = allow_ultra
         self.on_cookie_update = on_cookie_update
+        self._on_browser_refresh = on_browser_refresh
         self._transport: TransportFn = transport or _default_transport
 
         self._lock = threading.RLock()
@@ -224,6 +226,107 @@ class GeminiWebClient:
         self._reqid = 100_000 + random.randint(0, 799_999)
         self._rotate_after: float = 0.0
         self.thread = ChatThread()
+
+    @classmethod
+    def login(
+        cls,
+        profile: str = "default",
+        *,
+        timeout: float = 300.0,
+        browser_path: Optional[str] = None,
+        session_path: Optional[Union[str, os.PathLike]] = None,
+        account: int = 0,
+        **client_kwargs: object,
+    ) -> "GeminiWebClient":
+        """Opens a browser window to sign into Gemini once, saves the session, and returns a client."""
+        from .auth import browser_login, refresh_from_browser, save_session
+
+        saved = browser_login(
+            profile=profile,
+            headless=False,
+            timeout=timeout,
+            browser_path=browser_path,
+            session_path=session_path,
+            account=account,
+        )
+
+        def persist(acc: int, updated: str) -> None:
+            save_session(updated, profile=profile, email=saved.email, account=acc, path=session_path)
+
+        def browser_refresh() -> Optional[str]:
+            refreshed = refresh_from_browser(
+                profile=profile,
+                browser_path=browser_path,
+                session_path=session_path,
+                account=saved.account,
+            )
+            return refreshed.cookies if refreshed else None
+
+        return cls(
+            saved.cookies,
+            account=saved.account,
+            on_cookie_update=persist,
+            on_browser_refresh=browser_refresh,
+            **client_kwargs,  # type: ignore[arg-type]
+        )
+
+    @classmethod
+    def from_session(
+        cls,
+        profile: str = "default",
+        *,
+        auto_login: bool = True,
+        headless_refresh: bool = True,
+        browser_path: Optional[str] = None,
+        session_path: Optional[Union[str, os.PathLike]] = None,
+        account: Optional[int] = None,
+        **client_kwargs: object,
+    ) -> "GeminiWebClient":
+        """Loads GEMINI_COOKIE or ~/.gemini-web-to-api/session.json; optionally opens browser login on first run."""
+        from .auth import browser_login, load_session, refresh_from_browser, save_session
+
+        env_cookie = os.environ.get("GEMINI_COOKIE", "").strip()
+        if env_cookie:
+            acc = int(os.environ.get("GEMINI_ACCOUNT", "0")) if account is None else account
+            return cls(env_cookie, account=acc, **client_kwargs)  # type: ignore[arg-type]
+
+        saved = load_session(profile=profile, path=session_path)
+        if saved is None:
+            if not auto_login:
+                raise AuthRejectedError(
+                    f"No saved session for profile '{profile}'. Run `python -m gemini_web_to_api login` first."
+                )
+            saved = browser_login(
+                profile=profile,
+                headless=False,
+                browser_path=browser_path,
+                session_path=session_path,
+                account=account or 0,
+            )
+
+        use_account = saved.account if account is None else account
+
+        def persist(acc: int, updated: str) -> None:
+            save_session(updated, profile=profile, email=saved.email, account=acc, path=session_path)
+
+        def browser_refresh() -> Optional[str]:
+            if not headless_refresh:
+                return None
+            refreshed = refresh_from_browser(
+                profile=profile,
+                browser_path=browser_path,
+                session_path=session_path,
+                account=use_account,
+            )
+            return refreshed.cookies if refreshed else None
+
+        return cls(
+            saved.cookies,
+            account=use_account,
+            on_cookie_update=persist,
+            on_browser_refresh=browser_refresh,
+            **client_kwargs,  # type: ignore[arg-type]
+        )
 
     @property
     def live_cookies(self) -> str:
@@ -306,10 +409,18 @@ class GeminiWebClient:
                 self._absorb(res)
             return res
 
-        # Attempt single cookie rotation + shell validation, then replay once.
-        if not self.rotate_cookies(force=True):
-            return res
-        fresh_shell = self._fetch_shell_raw(timeout=20.0)
+        # Attempt HTTP cookie rotation first; if that fails, try silent headless browser refresh.
+        fresh_shell: Optional[WebSession] = None
+        if self.rotate_cookies(force=True):
+            fresh_shell = self._fetch_shell_raw(timeout=20.0)
+        if (not fresh_shell or not fresh_shell.authenticated) and self._on_browser_refresh:
+            new_cookies = self._on_browser_refresh()
+            if new_cookies:
+                try:
+                    self.jar = parse_cookie_header(new_cookies, account=self.jar.account)
+                    fresh_shell = self._fetch_shell_raw(timeout=20.0)
+                except ValueError:
+                    fresh_shell = None
         if not fresh_shell or not fresh_shell.authenticated:
             return res
 
@@ -845,7 +956,20 @@ class AsyncGeminiWebClient:
     """Async wrapper over GeminiWebClient for asyncio apps."""
 
     def __init__(self, *args: object, **kwargs: object) -> None:
-        self._sync = GeminiWebClient(*args, **kwargs)  # type: ignore[arg-type]
+        if len(args) == 1 and isinstance(args[0], GeminiWebClient) and not kwargs:
+            self._sync = args[0]
+        else:
+            self._sync = GeminiWebClient(*args, **kwargs)  # type: ignore[arg-type]
+
+    @classmethod
+    async def from_session(cls, *args: object, **kwargs: object) -> "AsyncGeminiWebClient":
+        sync_client = await asyncio.to_thread(lambda: GeminiWebClient.from_session(*args, **kwargs))  # type: ignore[arg-type]
+        return cls(sync_client)
+
+    @classmethod
+    async def login(cls, *args: object, **kwargs: object) -> "AsyncGeminiWebClient":
+        sync_client = await asyncio.to_thread(lambda: GeminiWebClient.login(*args, **kwargs))  # type: ignore[arg-type]
+        return cls(sync_client)
 
     @property
     def live_cookies(self) -> str:

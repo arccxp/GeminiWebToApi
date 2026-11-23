@@ -2,46 +2,45 @@
 
 This repository is the standalone Gemini Web wrapper extracted from my private work. I originally wrote it in C++ for a private project, pulled the Gemini Web layer out on its own, and added matching zero-dependency wrappers for Python and Node.js plus a local HTTP bridge so coding tools and other languages can use it too.
 
-It talks straight to `gemini.google.com` over HTTP using your browser session cookies. No browser automation is required for normal text, image, model-list, or quota calls.
+It talks straight to `gemini.google.com` over HTTP using your Google session cookies. A built-in browser login command signs you in once, saves the session locally, and refreshes rotating cookies automatically so you do not have to dig through DevTools every time.
 
 ## What is inside
 
 - `cpp/` is the original C++17 wrapper (`gwa::Client` plus a C ABI shared library in `c_api.h` for Rust, Go, C#, or C callers). Uses WinHTTP on Windows and libcurl on Linux and macOS.
-- `python/` is a Python 3.9+ wrapper (`GeminiWebClient` and `AsyncGeminiWebClient`) using only the standard library, plus a local HTTP bridge server.
-- `nodejs/` is a Node.js 18+ ESM wrapper (`GeminiWebClient`) with TypeScript definitions (`index.d.ts`) and a matching local HTTP bridge server, with zero npm dependencies.
+- `python/` is a Python 3.9+ wrapper (`GeminiWebClient` and `AsyncGeminiWebClient`) using only the standard library, plus a built-in browser login helper and local HTTP bridge server.
+- `nodejs/` is a Node.js 18+ ESM wrapper (`GeminiWebClient`) with TypeScript definitions (`index.d.ts`), browser login helper, and matching local HTTP bridge server, with zero npm dependencies.
 - `docs/agents.md` shows how to point Claude Code, Aider, Cline, Roo Code, OpenCode, and SDKs at the local bridge.
 - `docs/web-to-api-guide.md` walks through how this wrapper works on the wire and how to build a web-to-API wrapper for coding workflows yourself.
 
-## Getting your cookies
+## Sign in once (no DevTools needed)
 
-1. Open `https://gemini.google.com/app` in Chrome or Edge while signed in.
-2. Open DevTools (F12), go to the Network tab, and reload the page.
-3. Click any request to `gemini.google.com` and copy the `Cookie` request header (or right-click, Copy as cURL, and pass the `-H 'cookie: ...'` fragment; the parser unwraps it).
-4. Put it in an environment variable so it stays out of shell history and git:
+Run either login command once:
 
 ```bash
-export GEMINI_COOKIE='__Secure-1PSID=...; __Secure-1PSIDTS=...; SAPISID=...'
+# Python
+PYTHONPATH=python python -m gemini_web_to_api login
+
+# Node.js
+npm --prefix nodejs run login
 ```
 
-PowerShell:
+This opens Chrome, Edge, Brave, or Chromium with its own isolated profile under `~/.gemini-web-to-api/browser/default` (never touching your normal browser profile). Sign into Google, wait a second for `gemini.google.com/app` to finish loading, and the window closes automatically after saving the session to `~/.gemini-web-to-api/session.json`.
 
-```powershell
-$env:GEMINI_COOKIE = '__Secure-1PSID=...; __Secure-1PSIDTS=...; SAPISID=...'
-```
+Python, Node.js, C++, and the local HTTP bridge all read that same `session.json` file. When Google rotates `__Secure-1PSIDTS`, the wrapper writes the fresh cookies back to `session.json` automatically. If HTTP rotation ever returns 401, the Python and Node.js clients can also silently refresh cookies via `--headless=new` against that saved browser profile without popping open a window.
 
-If you are signed into multiple Google accounts in the same browser, pass `account=1` (or `GEMINI_ACCOUNT=1`) to select `/u/1/app` and sign with `__Secure-2PAPISID`.
+Multiple Google accounts work by passing a profile name (`--profile work` or `GEMINI_PROFILE=work`), which gives each login its own isolated browser directory and entry in `session.json`.
 
-Google rotates `__Secure-1PSIDTS` frequently. The wrapper absorbs `Set-Cookie` headers from every response and calls `accounts.google.com/RotateCookies` when a session goes stale or returns 401. Pass an `on_cookie_update` / `onCookieUpdate` / `SetCookieUpdateCallback` hook to save the updated header back to disk if you run long-lived processes.
+If your browser is in a custom location, set `GEMINI_BROWSER=/path/to/chrome`. If you are on a headless server with no browser installed, you can still set `GEMINI_COOKIE` manually by copying a `Cookie:` header from DevTools.
 
 ## Python
 
 No `pip install` is required if you add `python/` to `PYTHONPATH`, or install it editable with `pip install -e ./python`.
 
 ```python
-import os
 from gemini_web_to_api import GeminiWebClient
 
-client = GeminiWebClient(os.environ["GEMINI_COOKIE"])
+# Loads ~/.gemini-web-to-api/session.json (or opens browser login on first run)
+client = GeminiWebClient.from_session()
 
 models, tier, email = client.list_models()
 print(tier.label, email, [m.name for m in models])
@@ -64,16 +63,17 @@ meter = client.get_usage()
 print(meter.short_window.used_percent, "% used in 5h window")
 ```
 
-For `asyncio` code, import `AsyncGeminiWebClient` instead.
+For `asyncio` code, use `await AsyncGeminiWebClient.from_session()`.
 
 ## Node.js and TypeScript
 
-Requires Node.js 18+ (uses built-in `fetch` and `node:crypto`).
+Requires Node.js 18+ (uses built-in `fetch`, `node:crypto`, and a localhost CDP socket with no npm dependencies).
 
 ```js
 import { GeminiWebClient } from "./nodejs/src/index.js";
 
-const client = new GeminiWebClient(process.env.GEMINI_COOKIE);
+// Loads ~/.gemini-web-to-api/session.json (or opens browser login on first run)
+const client = await GeminiWebClient.fromSession();
 
 const { models, tier, email } = await client.listModels();
 console.log(tier, email, models.map((m) => m.name));
@@ -108,7 +108,8 @@ ctest --test-dir cpp/build --output-on-failure
 int main() {
     gwa::Client client;
     std::string error;
-    if (!client.Init(gwa::util::GetEnv("GEMINI_COOKIE"), 0, error)) {
+    // Reads GEMINI_COOKIE or ~/.gemini-web-to-api/session.json saved by `login`
+    if (!client.InitFromSession("default", error)) {
         std::cerr << error << "\n";
         return 1;
     }
@@ -124,18 +125,18 @@ int main() {
 }
 ```
 
-Other languages (Rust, Go, C#, Zig, C) can link `gemini_web_ffi` against `cpp/include/gemini_web/c_api.h`, or talk to the local HTTP bridge over localhost.
+Other languages (Rust, Go, C#, Zig, C) can link `gemini_web_ffi` against `cpp/include/gemini_web/c_api.h` (using `gwa_client_create_from_session`), or talk to the local HTTP bridge over localhost.
 
 ## Using with Claude Code and other AI coding agents
 
-Start the local bridge with either Python or Node.js:
+Start the local bridge with either Python or Node.js. If you have not logged in yet, it opens the browser sign-in window automatically on startup:
 
 ```bash
 # Python
 PYTHONPATH=python python -m gemini_web_to_api serve --port 8080
 
 # Node.js
-PORT=8080 node nodejs/src/server.js
+PORT=8080 npm --prefix nodejs run serve
 ```
 
 The bridge exposes both wire formats on the same port:

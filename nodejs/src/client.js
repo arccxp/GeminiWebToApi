@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { browserLogin, loadSession, refreshFromBrowser, saveSession } from "./auth.js";
 import { CookieJar, headerCookie, parseCookieHeader } from "./cookies.js";
 import {
   AccountTier,
@@ -131,6 +132,7 @@ export class GeminiWebClient {
       generateTimeoutMs = 300_000,
       allowUltra = false,
       onCookieUpdate = null,
+      onBrowserRefresh = null,
       transport = null,
     } = {}
   ) {
@@ -145,6 +147,7 @@ export class GeminiWebClient {
     this.generateTimeoutMs = generateTimeoutMs;
     this.allowUltra = allowUltra;
     this.onCookieUpdate = onCookieUpdate;
+    this._onBrowserRefresh = onBrowserRefresh;
     this._transport = transport || defaultTransport;
 
     this._session = null;
@@ -156,6 +159,89 @@ export class GeminiWebClient {
     this._reqid = 100_000 + Math.floor(Math.random() * 800_000);
     this._rotateAfter = 0;
     this.thread = { conversation: "", response: "", candidate: "" };
+  }
+
+  static async login({
+    profile = "default",
+    timeoutMs = 300_000,
+    browserPath = null,
+    sessionPath = null,
+    account = 0,
+    ...clientOptions
+  } = {}) {
+    const saved = await browserLogin({
+      profile,
+      headless: false,
+      timeoutMs,
+      browserPath,
+      sessionPath,
+      account,
+    });
+    return new GeminiWebClient(saved.cookies, {
+      ...clientOptions,
+      account: saved.account,
+      onCookieUpdate: (acc, updated) =>
+        saveSession(updated, { profile, email: saved.email, account: acc, sessionPath }),
+      onBrowserRefresh: async () => {
+        const refreshed = await refreshFromBrowser({
+          profile,
+          browserPath,
+          sessionPath,
+          account: saved.account,
+        });
+        return refreshed ? refreshed.cookies : null;
+      },
+    });
+  }
+
+  static async fromSession({
+    profile = "default",
+    autoLogin = true,
+    headlessRefresh = true,
+    browserPath = null,
+    sessionPath = null,
+    account = null,
+    ...clientOptions
+  } = {}) {
+    const envCookie = (process.env.GEMINI_COOKIE || "").trim();
+    if (envCookie) {
+      const acc = account == null ? Number(process.env.GEMINI_ACCOUNT || 0) : account;
+      return new GeminiWebClient(envCookie, { ...clientOptions, account: acc });
+    }
+
+    let saved = loadSession(profile, { sessionPath });
+    if (!saved) {
+      if (!autoLogin) {
+        throw new AuthRejectedError(
+          `No saved session for profile '${profile}'. Run 'npm run login' (or node src/auth.js) first.`
+        );
+      }
+      saved = await browserLogin({
+        profile,
+        headless: false,
+        browserPath,
+        sessionPath,
+        account: account || 0,
+      });
+    }
+
+    const useAccount = account == null ? saved.account : account;
+    return new GeminiWebClient(saved.cookies, {
+      ...clientOptions,
+      account: useAccount,
+      onCookieUpdate: (acc, updated) =>
+        saveSession(updated, { profile, email: saved.email, account: acc, sessionPath }),
+      onBrowserRefresh: async () => {
+        if (!headlessRefresh) return null;
+        const refreshed = await refreshFromBrowser({
+          profile,
+          browserPath,
+          sessionPath,
+          account: useAccount,
+        });
+        return refreshed ? refreshed.cookies : null;
+      },
+    });
   }
 
   get liveCookies() {
@@ -248,8 +334,21 @@ export class GeminiWebClient {
       return res;
     }
 
-    if (!(await this.rotateCookies({ force: true }))) return res;
-    const freshShell = await this._fetchShellRaw(20_000);
+    let freshShell = null;
+    if (await this.rotateCookies({ force: true })) {
+      freshShell = await this._fetchShellRaw(20_000);
+    }
+    if ((!freshShell || !freshShell.authenticated) && typeof this._onBrowserRefresh === "function") {
+      const refreshedCookies = await this._onBrowserRefresh();
+      if (refreshedCookies) {
+        try {
+          this.jar = parseCookieHeader(refreshedCookies, this.jar.account);
+          freshShell = await this._fetchShellRaw(20_000);
+        } catch {
+          freshShell = null;
+        }
+      }
+    }
     if (!freshShell || !freshShell.authenticated) return res;
 
     this._session = freshShell;

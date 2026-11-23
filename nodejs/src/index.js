@@ -1,4 +1,16 @@
 export {
+  browserLogin,
+  browserProfileDir,
+  defaultDataDir,
+  defaultSessionPath,
+  findChromiumBrowser,
+  formatCdpCookies,
+  hasBrowserProfile,
+  loadSession,
+  refreshFromBrowser,
+  saveSession,
+} from "./auth.js";
+export {
   AuthRejectedError,
   DEFAULT_MODEL,
   GeminiWebClient,

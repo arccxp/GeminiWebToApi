@@ -28,6 +28,10 @@ typedef void (*gwa_partial_cb)(const char* snapshot, size_t len, void* userdata)
 GWA_API gwa_client_t* gwa_client_create(const char* cookie_header, int account_slot,
                                         char* err_buf, size_t err_buf_len);
 
+// Creates a client from GEMINI_COOKIE or ~/.gemini-web-to-api/session.json.
+GWA_API gwa_client_t* gwa_client_create_from_session(const char* profile,
+                                                     char* err_buf, size_t err_buf_len);
+
 GWA_API void gwa_client_destroy(gwa_client_t* client);
 
 // Sends a prompt (with optional image paths and streaming callback).

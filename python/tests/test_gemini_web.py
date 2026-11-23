@@ -30,6 +30,7 @@ from gemini_web_to_api import (
     strip_citations,
     usage_summary,
 )
+from gemini_web_to_api.auth import format_cdp_cookies, load_session, save_session
 from gemini_web_to_api.client import HttpResult
 from gemini_web_to_api.protocol import parse_bard_error
 from gemini_web_to_api.usage import classify_quota_rows
@@ -206,6 +207,47 @@ class TestGeminiWebPython(unittest.TestCase):
         ans, streamed = asyncio.run(run())
         self.assertEqual(ans, "Hello world ")
         self.assertEqual(streamed, "Hello world ")
+
+    def test_session_store_and_cdp_cookie_scoping(self) -> None:
+        import os
+        import tempfile
+
+        header = format_cdp_cookies(
+            [
+                {"name": "__Secure-1PSID", "value": "ps1", "domain": ".google.com"},
+                {"name": "SAPISID", "value": "sap1", "domain": ".google.com"},
+            ],
+            [
+                {"name": "__Host-GAPS", "value": "gap_val", "domain": "accounts.google.com"},
+                {"name": "__Secure-1PSIDTS", "value": "ts_1", "domain": ".google.com"},
+            ],
+        )
+        self.assertIn("__Secure-1PSID=ps1", header)
+        self.assertIn("GwaAccounts.__Host-GAPS=gap_val", header)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            sess_file = Path(tmp) / "session.json"
+            save_session(header, profile="work", email="work@example.com", account=0, path=sess_file)
+            loaded = load_session("work", path=sess_file)
+            self.assertIsNotNone(loaded)
+            assert loaded is not None
+            self.assertEqual(loaded.email, "work@example.com")
+            self.assertEqual(loaded.cookies, header)
+
+            # from_session loads session.json and auto-persists rotated Set-Cookie updates
+            prev_env = os.environ.pop("GEMINI_COOKIE", None)
+            try:
+                transport, _ = _make_mock_transport()
+                client = GeminiWebClient.from_session(
+                    profile="work", auto_login=False, session_path=sess_file, transport=transport
+                )
+                client.list_models()
+                reloaded = load_session("work", path=sess_file)
+                assert reloaded is not None
+                self.assertIn("__Secure-1PSIDTS=ts_rotated", reloaded.cookies)
+            finally:
+                if prev_env is not None:
+                    os.environ["GEMINI_COOKIE"] = prev_env
 
     def test_tool_call_bridge_and_http_server(self) -> None:
         tool_reply = 'Checking files.\n```tool_call\n{"name": "Read", "input": {"path": "main.py"}}\n```'

@@ -4,13 +4,7 @@ Coding agents almost always speak one of two HTTP protocols: Anthropic's `/v1/me
 
 ## Starting the bridge
 
-Set your browser cookie header first, then pick either runtime:
-
-```bash
-export GEMINI_COOKIE='__Secure-1PSID=...; __Secure-1PSIDTS=...; SAPISID=...'
-export GEMINI_MODEL='gemini-auto'   # optional: pin a specific model like gemini-3.1-pro
-export GEMINI_EFFORT='high'         # optional: low | medium | high
-```
+Run the bridge with either runtime. On the first run, if `~/.gemini-web-to-api/session.json` does not exist and `GEMINI_COOKIE` is unset, it opens a browser window so you can sign into Google once and saves the session for future runs.
 
 Python:
 
@@ -21,7 +15,15 @@ PYTHONPATH=python python -m gemini_web_to_api serve --host 127.0.0.1 --port 8080
 Node.js:
 
 ```bash
-PORT=8080 node nodejs/src/server.js
+PORT=8080 npm --prefix nodejs run serve
+```
+
+Optional environment variables:
+
+```bash
+export GEMINI_PROFILE='default'     # switch between saved login profiles
+export GEMINI_MODEL='gemini-auto'   # pin a specific model like gemini-3.1-pro
+export GEMINI_EFFORT='high'         # low | medium | high
 ```
 
 Keep the server bound to `127.0.0.1`. Anyone who can reach the port can spend your Google account's Gemini quota. If you expose it on a LAN interface, set `BRIDGE_API_KEY` so every request has to send a matching `Authorization: Bearer <key>` or `x-api-key` header.

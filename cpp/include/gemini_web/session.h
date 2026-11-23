@@ -31,4 +31,16 @@ void MarkLogin(Record& record, const std::string& header, int account = 0);
 void MarkFailure(Record& record);
 bool NeedsManualLogin(const Record& record);
 
+// Cross-language session file (~/.gemini-web-to-api/session.json or GEMINI_SESSION_FILE)
+// shared with the Python and Node.js browser login helpers.
+struct SharedSession {
+    std::string cookies;
+    std::string email;
+    int account = 0;
+};
+
+std::string SharedSessionPath();
+bool LoadSharedSession(const std::string& profile, SharedSession& out,
+                       const std::string& explicitPath = {});
+
 }  // namespace gwa::session

@@ -2915,6 +2915,26 @@ bool Client::Init(const std::string& cookieHeader, int accountSlot, std::string&
     return true;
 }
 
+bool Client::InitFromSession(const std::string& profile, std::string& error,
+                             const std::string& explicitSessionPath) {
+    const std::string envCookie = util::Trim(util::GetEnv("GEMINI_COOKIE"));
+    if (!envCookie.empty()) {
+        const std::string envAcc = util::Trim(util::GetEnv("GEMINI_ACCOUNT"));
+        const int slot = envAcc.empty() ? 0 : std::atoi(envAcc.c_str());
+        return Init(envCookie, slot, error);
+    }
+    session::SharedSession saved;
+    if (!session::LoadSharedSession(profile, saved, explicitSessionPath)) {
+        error = "no saved session found in " +
+                (explicitSessionPath.empty() ? session::SharedSessionPath() : explicitSessionPath) +
+                " (run the browser login helper or set GEMINI_COOKIE)";
+        return false;
+    }
+    if (!Init(saved.cookies, saved.account, error)) return false;
+    jar_.email = saved.email;
+    return true;
+}
+
 bool Client::ListModels(std::vector<WebModel>& models, std::string& error, AccountTier* tierOut,
                         std::string* emailOut) {
     if (!initialized_) {

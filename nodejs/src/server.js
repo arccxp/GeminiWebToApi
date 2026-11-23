@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import http from "node:http";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { DEFAULT_MODEL, GeminiWebClient } from "./client.js";
@@ -504,23 +505,37 @@ export function createBridgeServer(
   });
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  const cookie = process.env.GEMINI_COOKIE || "";
-  if (!cookie) {
-    console.error("Error: set GEMINI_COOKIE before starting the bridge.");
-    process.exit(1);
-  }
+const isMain = (() => {
+  if (!process.argv[1]) return false;
+  const selfPath = path.resolve(fileURLToPath(import.meta.url));
+  const argPath = path.resolve(process.argv[1]);
+  return process.platform === "win32"
+    ? selfPath.toLowerCase() === argPath.toLowerCase()
+    : selfPath === argPath;
+})();
+
+if (isMain) {
   const host = process.env.HOST || "127.0.0.1";
   const port = Number(process.env.PORT || 8080);
-  const client = new GeminiWebClient(cookie, { account: Number(process.env.GEMINI_ACCOUNT || 0) });
-  const server = createBridgeServer(client, {
-    defaultModel: process.env.GEMINI_MODEL || DEFAULT_MODEL,
-    defaultEffort: process.env.GEMINI_EFFORT || "medium",
-    apiKey: process.env.BRIDGE_API_KEY || null,
-  });
-  server.listen(port, host, () => {
-    console.log(`GeminiWebToApi bridge listening on http://${host}:${port}`);
-    console.log(`  OpenAI endpoint:    http://${host}:${port}/v1/chat/completions`);
-    console.log(`  Anthropic endpoint: http://${host}:${port}/v1/messages`);
-  });
+  const profile = process.env.GEMINI_PROFILE || "default";
+  GeminiWebClient.fromSession({
+    profile,
+    autoLogin: process.env.GEMINI_NO_AUTO_LOGIN !== "1",
+  })
+    .then((client) => {
+      const server = createBridgeServer(client, {
+        defaultModel: process.env.GEMINI_MODEL || DEFAULT_MODEL,
+        defaultEffort: process.env.GEMINI_EFFORT || "medium",
+        apiKey: process.env.BRIDGE_API_KEY || null,
+      });
+      server.listen(port, host, () => {
+        console.log(`GeminiWebToApi bridge listening on http://${host}:${port}`);
+        console.log(`  OpenAI endpoint:    http://${host}:${port}/v1/chat/completions`);
+        console.log(`  Anthropic endpoint: http://${host}:${port}/v1/messages`);
+      });
+    })
+    .catch((err) => {
+      console.error(`Failed to start bridge: ${err.message}`);
+      process.exit(1);
+    });
 }

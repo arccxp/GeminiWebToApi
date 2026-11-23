@@ -46,12 +46,29 @@ export interface UsageMeter {
   weekly: UsageWindow;
 }
 
+export interface SavedSession {
+  cookies: string;
+  email: string;
+  account: number;
+  updatedAt: number;
+  profile: string;
+}
+
+export interface SessionClientOptions extends ClientOptions {
+  profile?: string;
+  autoLogin?: boolean;
+  headlessRefresh?: boolean;
+  browserPath?: string | null;
+  sessionPath?: string | null;
+}
+
 export interface ClientOptions {
   account?: number;
   timeoutMs?: number;
   generateTimeoutMs?: number;
   allowUltra?: boolean;
   onCookieUpdate?: (account: number, updatedHeader: string) => void;
+  onBrowserRefresh?: () => Promise<string | null>;
 }
 
 export interface AskOptions {
@@ -85,6 +102,8 @@ export declare class GeminiWebClient {
   thread: ChatThread;
   readonly liveCookies: string;
   constructor(cookies: string | CookieJar, options?: ClientOptions);
+  static login(options?: SessionClientOptions): Promise<GeminiWebClient>;
+  static fromSession(options?: SessionClientOptions): Promise<GeminiWebClient>;
   resetChat(): void;
   resetSession(): void;
   listModels(options?: { force?: boolean }): Promise<{ models: WebModel[]; tier: AccountTierValue; email: string }>;
@@ -110,3 +129,12 @@ export declare function rotatingCookieChanged(previous: string, current: string,
 export declare function stripCitations(text: string): string;
 export declare function usageSummary(meter: UsageMeter, nowMs?: number): string;
 export declare function createBridgeServer(client: GeminiWebClient, options?: BridgeServerOptions): http.Server;
+export declare function defaultSessionPath(): string;
+export declare function findChromiumBrowser(explicit?: string | null): string | null;
+export declare function loadSession(profile?: string, opts?: { sessionPath?: string | null }): SavedSession | null;
+export declare function saveSession(
+  cookies: string,
+  opts?: { profile?: string; email?: string; account?: number; sessionPath?: string | null }
+): string;
+export declare function browserLogin(opts?: SessionClientOptions): Promise<SavedSession>;
+export declare function refreshFromBrowser(opts?: SessionClientOptions): Promise<SavedSession | null>;

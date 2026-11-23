@@ -10,6 +10,7 @@
 #include "gemini_web/client.h"
 #include "gemini_web/cookies.h"
 #include "gemini_web/jspb.h"
+#include "gemini_web/session.h"
 #include "gemini_web/transport.h"
 #include "gemini_web/usage.h"
 #include "gemini_web/util.h"
@@ -249,6 +250,36 @@ void TestEndToEndMockProtocolAndCApi() {
     CHECK(shellHits >= 1 && registryHits >= 1 && generateHits >= 2 && usageHits >= 1);
 }
 
+void TestSharedSessionJsonLoad() {
+    const std::string json =
+        "{\n"
+        "  \"version\": 1,\n"
+        "  \"accounts\": {\n"
+        "    \"default\": {\n"
+        "      \"cookies\": \"__Secure-1PSID=p1; SAPISID=s1\",\n"
+        "      \"email\": \"dev@example.com\",\n"
+        "      \"account\": 0,\n"
+        "      \"updated_at\": 1700000000\n"
+        "    }\n"
+        "  }\n"
+        "}\n";
+    const std::string tmpPath = "gwa_test_session.json";
+    std::vector<uint8_t> bytes(json.begin(), json.end());
+    CHECK(gwa::util::WriteFileBytes(tmpPath, bytes));
+
+    gwa::session::SharedSession saved;
+    CHECK(gwa::session::LoadSharedSession("default", saved, tmpPath));
+    CHECK(saved.email == "dev@example.com");
+    CHECK(saved.account == 0);
+    CHECK(saved.cookies.find("SAPISID=s1") != std::string::npos);
+
+    gwa::Client client;
+    std::string err;
+    CHECK(client.InitFromSession("default", err, tmpPath));
+    CHECK(client.Jar().email == "dev@example.com");
+    std::remove(tmpPath.c_str());
+}
+
 }  // namespace
 
 int main() {
@@ -257,6 +288,7 @@ int main() {
     TestCitationsAndUsage();
     TestSha1AndFormEncoding();
     TestEndToEndMockProtocolAndCApi();
+    TestSharedSessionJsonLoad();
 
     if (g_failed != 0) {
         std::cerr << g_failed << " check(s) failed.\n";
